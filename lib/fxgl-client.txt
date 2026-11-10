@@ -1,0 +1,58 @@
+(()=>{
+// Moteur WebGL des contours animés (flamme, éclair, eau…). Un canvas par carte visible, une seule boucle d'animation.
+// Repli : si WebGL indisponible, le contour SVG statique reste affiché.
+var probe=document.createElement('canvas');var ok=!!(probe.getContext('webgl')||probe.getContext('experimental-webgl'));if(!ok)return;
+var MODES={flame:0,toxic:1,water:2,bolt:3,ice:4,gold:5,laser:6,rainbow:7};
+var VS='attribute vec2 a;varying vec2 v;void main(){v=vec2(a.x*.5+.5,.5-a.y*.5);gl_Position=vec4(a,0.,1.);}';
+var FS=['precision mediump float;varying vec2 v;uniform sampler2D H;uniform vec4 R;uniform float T;uniform float M;uniform vec2 S;',
+'float h1(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}',
+'float ns(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(h1(i),h1(i+vec2(1,0)),f.x),mix(h1(i+vec2(0,1)),h1(i+vec2(1,1)),f.x),f.y);}',
+'float fb(vec2 p){float s=0.,a=.5;for(int k=0;k<4;k++){s+=a*ns(p);p=p*2.03+vec2(1.7,9.2);a*=.5;}return s;}',
+'vec3 hsv(float h){return clamp(abs(mod(h*6.+vec3(0,4,2),6.)-3.)-1.,0.,1.);}',
+'void main(){vec2 p=(v-R.xy)/R.zw;if(p.x<0.||p.y<0.||p.x>1.||p.y>1.){gl_FragColor=vec4(0.);return;}',
+'vec2 q=p*S;vec4 h=texture2D(H,p);float body=h.g;vec3 col=vec3(0.);float al=0.;',
+// Feu / poison / eau : halo déformé par un bruit qui défile, puis dégradé en 3 couleurs
+'if(M<2.5){float sp=M<.5?1.1:(M<1.5?.45:.35);vec2 fl=M<1.5?vec2(0.,T*sp):vec2(T*sp,T*.08);vec2 sc=M<.5?vec2(13.,5.):(M<1.5?vec2(8.,6.):vec2(6.,7.));',
+'float n=clamp((fb(q/S*sc+fl)-.5)*1.9+.5,0.,1.);float d=texture2D(H,p+vec2((n-.5)*.06,(n-.5)*.08+(M<1.5?.028:0.))).r;',
+'float f=d*1.5-n*1.6+(M<1.5?.08:.24);float g=d*.55;',
+'vec3 c1=M<.5?vec3(.85,.12,.03):(M<1.5?vec3(.1,.55,.04):vec3(.03,.3,.85));vec3 c2=M<.5?vec3(1.,.47,.09):(M<1.5?vec3(.37,1.,.18):vec3(.12,.7,1.));vec3 c3=M<.5?vec3(1.,.86,.42):(M<1.5?vec3(.9,1.,.7):vec3(.85,.97,1.));',
+'al=smoothstep(.2,.34,f);col=mix(c1,c2,smoothstep(.3,.55,f));col=mix(col,c3,smoothstep(.75,1.05,f));',
+'float gl=smoothstep(.05,.5,g)*.35*(1.-al);col=col*al+c1*gl;al=al+gl;}',
+// Éclair / glace : arcs fins le long du contour
+'else if(M<4.5){float e=h.b;float band=smoothstep(.02,.12,e)*(1.-smoothstep(.45,.8,e));',
+'if(M<3.5){float tq=floor(T*12.);float wide=smoothstep(.01,.08,e)*(1.-smoothstep(.55,.9,e));float r=1.-abs(ns(p*vec2(16.,16.)+vec2(tq*3.7,tq*1.9))*2.-1.);float r2=1.-abs(ns(p*vec2(26.,26.)+vec2(tq*2.3,-tq*4.1))*2.-1.);',
+'float arc=(smoothstep(.93,.985,r)+smoothstep(.95,.99,r2)*.7)*wide;float line=smoothstep(.05,.12,e)*(1.-smoothstep(.2,.38,e));float glow=wide*.3*(.75+.25*sin(T*40.));',
+'col=vec3(.2,.6,1.)*(glow+line*.8)+vec3(.9,.97,1.)*arc*1.4;al=clamp(glow+line*.8+arc,0.,1.);}',
+'else{float cr=fb(p*vec2(30.,30.));float frost=smoothstep(.3,.62,e+(cr-.5)*.6)*(1.-smoothstep(.6,.95,e))+smoothstep(.05,.12,e)*(1.-smoothstep(.22,.36,e));float tw=step(.985,h1(floor(p*90.)+floor(T*2.5)))*band;',
+'col=vec3(.75,.93,1.)*frost+vec3(1.)*tw;al=clamp(frost*.85+tw+band*.15,0.,1.);col+=vec3(.35,.75,1.)*band*.15;}}',
+// Or / laser / holo : trait néon net + reflet qui fait le tour
+'else{float e=h.b;float line=smoothstep(.04,.12,e)*(1.-smoothstep(.22,.42,e));float glow=smoothstep(.0,.35,e)*(1.-smoothstep(.35,.9,e))*.55;',
+'float a=atan(p.y-.45,p.x-.5);float hl=pow(.5+.5*sin(a*2.-T*2.6),14.);vec3 c=M<5.5?vec3(1.,.72,.12):(M<6.5?vec3(1.,.12,.3):hsv(fract(a*.159+T*.12)));',
+'col=c*(glow+line)+vec3(1.)*hl*(line+glow*.8);al=clamp(glow+line+hl*line,0.,1.);}',
+'al*=(1.-body*.92);gl_FragColor=vec4(col*(1.-body*.92),al);}'].join('\n');
+var active=[],run=false;
+function prog(gl){function sh(t,s){var o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);return o;}var p=gl.createProgram();gl.attachShader(p,sh(gl.VERTEX_SHADER,VS));gl.attachShader(p,sh(gl.FRAGMENT_SHADER,FS));gl.linkProgram(p);return gl.getProgramParameter(p,gl.LINK_STATUS)?p:null;}
+// Halo calculé une fois à partir de la transparence de la photo : R = halo étiré vers le haut, G = corps, B = halo fin (contour)
+function halo(img,pad){var W=150,ih=Math.round(W*img.naturalHeight/img.naturalWidth),P=Math.round(W*pad),w=W+2*P,h=ih+2*P;var c=document.createElement('canvas');c.width=w;c.height=h;var x=c.getContext('2d');x.drawImage(img,P,P,W,ih);var d=x.getImageData(0,0,w,h),a=new Float32Array(w*h),i;for(i=0;i<w*h;i++)a[i]=d.data[i*4+3]/255;
+function blur(src,rx,ry,up){var t=new Float32Array(w*h),o=new Float32Array(w*h),X,Y,k,s,n;for(Y=0;Y<h;Y++)for(X=0;X<w;X++){s=0;n=0;for(k=-rx;k<=rx;k++){var xx=X+k;if(xx>=0&&xx<w){s+=src[Y*w+xx];n++;}}t[Y*w+X]=s/n;}
+for(X=0;X<w;X++)for(Y=0;Y<h;Y++){s=0;n=0;for(k=-Math.round(ry*(up?.25:1));k<=ry;k++){var yy=Y+k;if(yy>=0&&yy<h){s+=t[yy*w+X];n++;}}o[Y*w+X]=Math.min(1,s/n*(up?1.05:1.5));}return o;}
+var big=blur(blur(a,1,5,1),1,3,1),fine=blur(a,2,2,0),out=x.createImageData(w,h);for(i=0;i<w*h;i++){out.data[i*4]=big[i]*255;out.data[i*4+1]=a[i]*255;out.data[i*4+2]=fine[i]*255;out.data[i*4+3]=255;}return {data:out,w:w,h:h,P:P/W};}
+function start(card){if(card._gl||card._gling)return;var mode=null;for(var k in MODES)if(card.classList.contains('fx-'+k))mode=k;if(!mode)return;var art=card.querySelector('.tc-art'),ph=art&&art.querySelector('img.ph');if(!ph)return;
+card._gling=1;var src=ph.classList.contains('nhl')?'/ph/nhl/'+ph.dataset.t+'/'+ph.dataset.id+'.png':'/ph/nba/'+ph.dataset.id+'.png';var im=new Image();im.crossOrigin='anonymous';
+im.onload=function(){card._gling=0;if(!card.classList.contains('vis'))return;try{var pad=.18,H=halo(im,pad);var cv=document.createElement('canvas');cv.className='fxgl';art.insertBefore(cv,ph);var gl=cv.getContext('webgl',{premultipliedAlpha:true,alpha:true,antialias:false});if(!gl){cv.remove();return;}var p=prog(gl);if(!p){cv.remove();return;}gl.useProgram(p);
+var b=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);var loc=gl.getAttribLocation(p,'a');gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+var tx=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,tx);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,H.data);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+gl.enable(gl.BLEND);gl.blendFunc(gl.ONE,gl.ONE_MINUS_SRC_ALPHA);
+var g={card:card,cv:cv,gl:gl,u:{R:gl.getUniformLocation(p,'R'),T:gl.getUniformLocation(p,'T'),M:gl.getUniformLocation(p,'M'),S:gl.getUniformLocation(p,'S')},mode:MODES[mode],pad:H.P,ph:ph,art:art,t0:performance.now()/1000-Math.random()*9};
+size(g);card._gl=g;card.classList.add('gl');active.push(g);loop();}catch(e){card._gling=0;}};
+im.onerror=function(){card._gling=0;};im.src=src;}
+function size(g){var A=g.art,P=g.ph,aw=A.clientWidth,ah=A.clientHeight,w=P.offsetWidth,h=P.offsetHeight;if(!w||!h||!aw){g.R=null;return;}var dpr=Math.min(devicePixelRatio||1,1.75),cw=Math.round(aw*dpr),ch=Math.round(ah*dpr);if(g.cv.width!==cw||g.cv.height!==ch){g.cv.width=cw;g.cv.height=ch;g.gl.viewport(0,0,cw,ch);}
+var x=P.offsetLeft-w/2,y=P.offsetTop,pw=w*(1+2*g.pad),phh=h+w*2*g.pad;g.R=[(x-w*g.pad)/aw,(y-w*g.pad)/ah,pw/aw,phh/ah];g.S=[pw/12,phh/12];}
+function stop(card){var g=card._gl;if(!g)return;card._gl=null;card.classList.remove('gl');active=active.filter(function(x){return x!==g;});var e=g.gl.getExtension('WEBGL_lose_context');if(e)e.loseContext();g.cv.remove();}
+var fc=0;function frame(){if(!active.length){run=false;return;}requestAnimationFrame(frame);if((fc++%45)===0)active.forEach(size);if(document.body.classList.contains('scr')||document.hidden)return;var now=performance.now()/1000;
+for(var i=0;i<active.length;i++){var g=active[i],gl=g.gl;if(!g.R)continue;gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT);gl.uniform4f(g.u.R,g.R[0],g.R[1],g.R[2],g.R[3]);gl.uniform2f(g.u.S,g.S[0],g.S[1]);gl.uniform1f(g.u.T,now-g.t0);gl.uniform1f(g.u.M,g.mode);gl.drawArrays(gl.TRIANGLE_STRIP,0,4);}}
+function loop(){if(!run){run=true;requestAnimationFrame(frame);}}
+var io=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting)start(e.target);else stop(e.target);});},{rootMargin:'60px'});
+document.querySelectorAll('.tc[class*="fx-"]').forEach(function(c){io.observe(c);});
+addEventListener('resize',function(){active.forEach(size);});
+})();

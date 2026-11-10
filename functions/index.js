@@ -1,11 +1,12 @@
 // Point d'entrée Neon Function : robot de stats + API publique des picks
-import { homePage, playerPage, playersIndex, ideasPage, roadmapPage, classementPage, NEWS_LIST, sitemap, notFound, visualPage, nbaVisual, dayFR, page } from '../lib/site.js';
+import { homePage, playerPage, playersIndex, ideasPage, roadmapPage, classementPage, NEWS_LIST, sitemap, notFound, visualPage, nbaVisual, dayFR, page, algoPage, tc, hourFR } from '../lib/site.js';
 import { renderNews, renderPng, tweetText, recapText, xUpload, xTweet, xMe, xMetrics } from '../lib/xpost.js';
 import { usDate } from '../lib/ttfl.js';
 import { STATS } from '../lib/trends.js';
 import { fiabilitePage, fiabiliteCsv } from '../lib/fiabilite.js';
 import { nhlHome, nhlPlayer, nhlVisual, nhlVisualSource } from '../lib/nhl-site.js';
-import { planSets, renderCards, cardsTweet, picksOf, loadHist, renderRecap, recapTweet, renderSingle, pollTweet, isStar } from '../lib/xcards.js';
+import { planSets, renderCards, cardsTweet, picksOf, loadHist, renderRecap, recapTweet, renderSingle, pollTweet, isStar, algoTweet } from '../lib/xcards.js';
+import { algoRows, algoLine } from '../lib/algo.js';
 import { nhlSchedule, nhlPending, nhlRosters, nhlInjuries, nhlTrends, nhlBootstrap, nhlBackfill } from '../lib/nhl.js';
 import { syncSchedule, ingestPending, backfill, syncInjuries, buildPicks, buildTrends, bootstrap, log, sql } from '../lib/jobs.js';
 
@@ -150,6 +151,85 @@ async function xPollAnswer(dry) {
   }
   return out.length ? out : 'rien à répondre';
 }
+
+// ---- Algo maison : tweet quotidien, bilan du lendemain, annonce de lancement ----
+const algoCardsOf = (rows, today) => rows.map((r) => { const [c1, c2] = tc(r.team); return { name: r.name, c1, c2, league: 'nba', photo: `https://cdn.nba.com/headshots/nba/latest/1040x760/${r.player_id}.png`, team: r.team, opp: r.opp, home: r.home, hour: hourFR(r.start_utc), start: r.start_utc, stat: r.stat, thr: Number(r.threshold), line: algoLine(r.stat, r.threshold), l10: r.l10, n10: 10, l5: r.l5, n5: 5, l20: r.l20, n20: 20, streak: r.streak, avg: r.avg10, pid: r.player_id, gid: r.game_id, prob: r.p, hist: r.vals }; });
+async function xAlgo(dry) {
+  await xTables();
+  await sql.query(`CREATE TABLE IF NOT EXISTS algo_picks (day date, rank int, pid int, name text, stat text, thr numeric, p numeric, gid text, PRIMARY KEY (day, pid))`);
+  const [cfg] = await sql.query(`SELECT enabled FROM x_config WHERE league = 'nba'`);
+  if (!dry && !cfg?.enabled) return 'désactivé';
+  const today = usDate();
+  const src = await nbaVisual();
+  if (src.day !== today) return `pas de match (prochain : ${src.day})`;
+  const [done] = await sql.query(`SELECT 1 FROM x_cards WHERE league = 'nba' AND day = $1 AND key = 'algo'`, [today]);
+  if (done && !dry) return 'déjà fait';
+  if (!dry && Date.now() < slotMs(today, '16:30')) return 'prévu à 16:30';
+  const rows = await algoRows(today, { limit: 4, future: true });
+  if (rows.length < 3) return `pas assez de séries (${rows.length})`;
+  const st = { league: 'nba', key: 'algo', title: 'Notre algo', slot: '16:30', cards: algoCardsOf(rows, today), dateTxt: dayFR(today) };
+  const text = algoTweet(st);
+  try { await loadHist(sql, 'nba', st.cards, STATS); } catch {}
+  const png = await renderCards(st);
+  if (dry) return { dry: true, bytes: png.length, text, joueurs: st.cards.map((c) => `${c.name} ${c.line} ${Math.round(c.prob * 100)}%`) };
+  const id = await xTweet(text, await xUpload(png, process.env), process.env);
+  await sql.query(`INSERT INTO x_cards (league, day, key, tweet_id, text, slot, picks) VALUES ('nba',$1,'algo',$2,$3,'16:30',$4) ON CONFLICT DO NOTHING`, [today, id, text, JSON.stringify(picksOf(st))]);
+  for (const [i, c] of st.cards.entries()) await sql.query(`INSERT INTO algo_picks (day, rank, pid, name, stat, thr, p, gid) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING`, [today, i + 1, c.pid, c.name, c.stat, c.thr, c.prob, c.gid]);
+  let lien = null;
+  try {
+    const [r0] = await sql.query(`SELECT 1 FROM x_reply WHERE day = $1`, [today]);
+    if (!r0) { const rid = await xTweet('👉 Les 12 séries de l\'algo, avec les pourcentages et le suivi public (gratuit) : https://www.pickdusoir.fr/algo', null, process.env, id); await sql.query(`INSERT INTO x_reply (day, tweet_id, parent) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [today, rid, id]); lien = rid; }
+  } catch (e) { lien = { error: String(e).slice(0, 200) }; }
+  return { tweet: id, lien };
+}
+// Bilan de l'algo (texte seul, peu coûteux) : séries du jour précédent, résultat réel, total depuis le lancement
+async function xAlgoRecap(dry) {
+  await sql.query(`CREATE TABLE IF NOT EXISTS algo_picks (day date, rank int, pid int, name text, stat text, thr numeric, p numeric, gid text, PRIMARY KEY (day, pid))`);
+  await sql.query(`CREATE TABLE IF NOT EXISTS algo_recaps (day date PRIMARY KEY, tweet_id text, ts timestamptz DEFAULT now())`);
+  const today = usDate();
+  const [row] = await sql.query(`SELECT p.day::text AS day FROM algo_picks p WHERE p.day < $1 AND NOT EXISTS (SELECT 1 FROM algo_recaps r WHERE r.day = p.day) GROUP BY p.day ORDER BY p.day DESC LIMIT 1`, [today]);
+  if (!row) return 'rien à résumer';
+  const picks = await sql.query(`SELECT pid, name, stat, thr, gid FROM algo_picks WHERE day = $1 ORDER BY rank`, [row.day]);
+  const lines = []; let ok = 0, n = 0;
+  for (const k of picks) {
+    const [g] = await sql.query(`SELECT pts, reb, ast, tpm, stl, blk FROM player_games WHERE game_id = $1 AND player_id = $2 AND minutes > 0`, [k.gid, k.pid]);
+    if (!g) continue;
+    const v = STATS[k.stat].val(g), won = v >= Number(k.thr); n++; if (won) ok++;
+    lines.push(`${won ? '✅' : '❌'} ${String(k.name).trim().split(/\s+/).slice(1).join(' ') || k.name} : ${algoLine(k.stat, k.thr)} → ${v}`);
+  }
+  if (n < Math.min(3, picks.length)) return { attente: 'résultats incomplets', n };
+  const [tot] = await sql.query(`SELECT count(*)::int AS n FROM algo_picks WHERE day <= $1`, [row.day]);
+  let tn = 0, tok = 0;
+  for (const k of await sql.query(`SELECT pid, stat, thr, gid FROM algo_picks WHERE day <= $1`, [row.day])) {
+    const [g] = await sql.query(`SELECT pts, reb, ast, tpm, stl, blk FROM player_games WHERE game_id = $1 AND player_id = $2 AND minutes > 0`, [k.gid, k.pid]);
+    if (g) { tn++; if (STATS[k.stat].val(g) >= Number(k.thr)) tok++; }
+  }
+  void tot;
+  const text = `🤖 Bilan de l'algo d'hier : ${ok}/${n}\n\n${lines.join('\n')}\n\nDepuis le lancement : ${tok}/${tn} (${Math.round(tok / Math.max(tn, 1) * 100)} %). Suivi public, ratés compris.\nStats informatives, pas un conseil de pari.\n#NBA #TeamParieur`;
+  if (dry) return { dry: true, day: row.day, text };
+  const id = await xTweet(text, null, process.env);
+  await sql.query(`INSERT INTO algo_recaps (day, tweet_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [row.day, id]);
+  return { tweet: id };
+}
+// Annonce du lancement de l'algo (une seule fois, à partir de l'heure indiquée)
+const LAUNCH_AT = Date.parse('2026-11-11T10:30:00Z');
+async function xLaunchAlgo(dry) {
+  await sql.query(`CREATE TABLE IF NOT EXISTS x_news (key text PRIMARY KEY, tweet_id text, ts timestamptz DEFAULT now())`);
+  const [done] = await sql.query(`SELECT 1 FROM x_news WHERE key = 'launch-algo'`);
+  if (done && !dry) return 'déjà fait';
+  if (!dry && Date.now() < LAUNCH_AT) return 'prévu le 11/11 à 11h30';
+  const [cfg] = await sql.query(`SELECT bool_or(enabled) AS on FROM x_config`);
+  if (!dry && !cfg?.on) return 'désactivé';
+  const today = usDate();
+  const rows = await algoRows(today, { limit: 4, future: true });
+  const text = `🚀 Notre algo est en ligne : les chances de chaque série NBA du soir.\n\nTest sur 115 soirs passés : ses 4 meilleures séries réussies 83 % du temps, contre 67 % pour un simple x/10.\n\nSuivi public 👇 https://www.pickdusoir.fr/algo\n\nStats informatives, pas un conseil de pari.`;
+  let png = null;
+  if (rows.length >= 3) { const st = { league: 'nba', key: 'algo', title: 'Notre algo', cards: algoCardsOf(rows, today), dateTxt: dayFR(today) }; try { await loadHist(sql, 'nba', st.cards, STATS); } catch {} png = await renderCards(st); }
+  if (dry) return { dry: true, text, longueur: text.replace(/https?:\S+/g, 'x'.repeat(23)).length, image: png?.length };
+  const id = await xTweet(text, png ? await xUpload(png, process.env) : null, process.env);
+  await sql.query(`INSERT INTO x_news (key, tweet_id) VALUES ('launch-algo', $1) ON CONFLICT DO NOTHING`, [id]);
+  return { tweet: id };
+}
 // Tweets en cartes : une image 2x2 par thème, créneaux fixes (heure de Paris)
 async function xCards(league, dry, only) {
   await xTables();
@@ -183,7 +263,7 @@ async function xCards(league, dry, only) {
 const NHL_COL = { g: ['goals', 'but'], a: ['assists', 'passe'], p: ['points', 'point'] };
 async function xRecap(league, dry) {
   const today = usDate();
-  let [row] = await sql.query(`SELECT p.day::text AS day, jsonb_agg(e) AS picks FROM x_cards p, jsonb_array_elements(p.picks) e WHERE p.league = $1 AND p.day < $2 AND NOT EXISTS (SELECT 1 FROM x_recaps r WHERE r.league = p.league AND r.day = p.day) GROUP BY p.day ORDER BY p.day DESC LIMIT 1`, [league, today]);
+  let [row] = await sql.query(`SELECT p.day::text AS day, jsonb_agg(e) AS picks FROM x_cards p, jsonb_array_elements(p.picks) e WHERE p.league = $1 AND p.key <> 'algo' AND p.day < $2 AND NOT EXISTS (SELECT 1 FROM x_recaps r WHERE r.league = p.league AND r.day = p.day) GROUP BY p.day ORDER BY p.day DESC LIMIT 1`, [league, today]);
   if (!row) [row] = await sql.query(`SELECT p.day::text AS day, p.picks FROM x_posts p WHERE p.league = $1 AND p.picks IS NOT NULL AND p.day < $2 AND NOT EXISTS (SELECT 1 FROM x_recaps r WHERE r.league = p.league AND r.day = p.day) ORDER BY p.day DESC LIMIT 1`, [league, today]);
   if (!row) return 'rien à résumer';
   const items = [];
@@ -259,6 +339,9 @@ async function xTick() {
     } catch (e) { out['bilan_' + league] = { error: String(e).slice(0, 300) }; }
   }
   if (new Date().getUTCHours() >= 8) { try { out.reponse_sondage = await xPollAnswer(false); } catch (e) { out.reponse_sondage = { error: String(e).slice(0, 300) }; } }
+  if (new Date().getUTCHours() >= 8) { try { out.bilan_algo = await xAlgoRecap(false); } catch (e) { out.bilan_algo = { error: String(e).slice(0, 300) }; } }
+  try { out.lancement_algo = await xLaunchAlgo(false); } catch (e) { out.lancement_algo = { error: String(e).slice(0, 300) }; }
+  try { out.algo = await xAlgo(false); } catch (e) { out.algo = { error: String(e).slice(0, 300) }; }
   if (new Date().getUTCHours() >= 9) { try { out.news = await xNews(false); } catch (e) { out.news = { error: String(e).slice(0, 300) }; } }
   // tweet du Défi arrêté (nov. 2026) : personne ne joue encore, on le relancera avec plus d'audience
   if (new Date().getUTCHours() >= 18) { try { out.sondage = await xPoll(false); } catch (e) { out.sondage = { error: String(e).slice(0, 300) }; } }
@@ -338,6 +421,9 @@ async function runJob(job, q) {
   else if (/^xrecap-(nba|nhl)$/.test(job)) { await xTables(); out.recap = await xRecap(job.slice(7), q.get('post') !== '1'); }
   else if (job === 'gsettle') { out.defi = await (await import('../lib/game.js')).settleGame(); }
   else if (job === 'xpoll') { out.poll = await xPoll(q.get('post') !== '1'); }
+  else if (job === 'xalgo') { out.algo = await xAlgo(q.get('post') !== '1'); }
+  else if (job === 'xalgorecap') { out.algo = await xAlgoRecap(q.get('post') !== '1'); }
+  else if (job === 'xlaunch') { out.launch = await xLaunchAlgo(q.get('post') !== '1'); }
   else if (job === 'xpollanswer') { out.answer = await xPollAnswer(q.get('post') !== '1'); }
   else if (job === 'xdefi') { out.defi = await xDefi(q.get('post') !== '1'); }
   else if (job === 'xnews') { out.news = await xNews(q.get('post') !== '1'); }
@@ -492,6 +578,7 @@ export default {
     const origin = 'https://' + url.host;
     const html = async (body, status = 200) => new Response(await withVis(body), { status, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=300' } });
     if (path === '/') return html(await homePage(origin, q));
+    if (path === '/algo') return html(await algoPage(origin));
     if (path === '/roadmap') return html(roadmapPage(origin));
     if (path === '/classement') return html(await classementPage(origin, q));
     if (path === '/fiabilite') return html(await fiabilitePage(origin));
@@ -509,6 +596,7 @@ export default {
     if (path === '/a-propos') return html(page({ title: 'À propos | Pick du Soir', description: 'Qui fait Pick du Soir, comment les séries sont calculées, et ce que le site ne fait pas.', canonical: origin + '/a-propos', nav: 'apropos',
       body: `<section class="intro about"><p class="kick">À propos</p><h1>Un site de stats, fait par un fan</h1>
 <p>Pick du Soir est fait par Matthieu, fan de NBA et de NHL, en France. L'idée : voir en un coup d'œil quels joueurs sont réguliers en ce moment, sans passer une heure dans les feuilles de match.</p>
+<h2>Notre algorithme</h2><p>L'onglet Algo classe les séries NBA du soir par probabilité. Le modèle (une régression logistique) a été entraîné sur plus de 140 000 séries passées de la saison 2025-26 et du début de 2026-27, puis testé en conditions réelles : on le fait apprendre jusqu'à un mois, on le teste sur le mois suivant, et on recommence. Il pondère les 3, 5, 10 et 20 derniers matchs, la moyenne de saison, la régularité, les minutes jouées et le lieu du match. Ses limites : une saison et demie de données, aucune information sur la blessure d'un coéquipier ou le rythme du match. Un pourcentage est une estimation, jamais une certitude.</p>
 <h2>Comment c'est calculé</h2><p>Chaque jour, le site récupère les feuilles de match officielles et compte, pour chaque joueur qui joue le soir, combien de fois il a atteint un palier (par exemple 20+ points) sur ses 5, 10 et 20 derniers matchs. Les joueurs blessés ou absents sont retirés.</p>
 <h2>Ce que le site ne fait pas</h2><p>Pick du Soir ne propose aucun pari, ne donne pas de cotes et n'est lié à aucun opérateur. Une série passée ne dit pas ce qui va se passer ce soir. Toutes les séries publiées sur X sont suivies publiquement dans les <a href="/fiabilite"><u>Résultats</u></a>, ratés compris.</p>
 <h2>Contact</h2><p>Une idée, une erreur dans une stat ? Écris-nous sur X : <a href="https://x.com/PickDuSoir"><u>@PickDuSoir</u></a>, ou via la page <a href="/idees"><u>Proposer une idée</u></a>.</p></section>` }));

@@ -59,7 +59,7 @@ print(LG,len(F),'lignes ; base Plus (ligne de référence)',round(F[F.off==0].y.
 def fit(tr):
     mu,sd=tr[FE].mean(),tr[FE].std().replace(0,1); m=LogisticRegression(max_iter=3000,C=.3).fit((tr[FE]-mu)/sd,tr.y); return mu,sd,m
 oos=[]
-for mth in pd.period_range('2026-01','2026-11',freq='M'):
+for mth in pd.period_range('2026-01',pd.Timestamp.now().to_period('M'),freq='M'):   # test mois par mois, jusqu'au mois en cours
     s,e=mth.start_time,(mth+1).start_time; te=F[(F.d>=s)&(F.d<e)]; tr=F[F.d<s]
     if te.empty or len(tr)<TRAIN_MIN: continue
     mu,sd,m=fit(tr); oos.append(te.assign(z=m.decision_function((te[FE]-mu)/sd)))

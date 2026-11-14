@@ -8,6 +8,7 @@ import { nhlHome, nhlPlayer, nhlVisual, nhlVisualSource } from '../lib/nhl-site.
 import { planSets, renderCards, cardsTweet, picksOf, loadHist, renderRecap, recapTweet, renderSingle, pollTweet, isStar, algoTweet, renderWeek } from '../lib/xcards.js';
 import { algoRows, algoTables, settled, lineText } from '../lib/algo.js';
 import { fr1, statName, won } from '../lib/lignes.js';
+import { matchPage } from '../lib/match-pages.js';
 import { withAds, adsTxt } from '../lib/ads.js';
 import { legalPage } from '../lib/legal.js';
 import { NHL_TEAMS } from '../lib/nhl.js';
@@ -617,6 +618,8 @@ export default {
     if (path === '/joueurs') return html(await playersIndex(origin, q));
     if (path === '/nhl') return html(await nhlHome(origin, q));
     if (path === '/nhl/visuel') return new Response(await nhlVisual(origin, q), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
+    const mp = path.match(/^(\/nhl)?\/match\/(.+)$/);
+    if (mp) { const out = await matchPage(mp[1] ? 'nhl' : 'nba', mp[2], origin); return out ? html(out) : html(notFound(), 404); }
     if (path.startsWith('/nhl/joueur/')) {
       const out = await nhlPlayer(decodeURIComponent(path.slice(12)), origin, q);
       return out ? html(out) : html(notFound(), 404);

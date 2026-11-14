@@ -15,6 +15,10 @@ Build : `npx esbuild functions/index.js --bundle --minify --platform=node --targ
 - Réentraîner : `DATABASE_URL=... node etude/dump.mjs`, puis `python3 etude/lignes.py nba v` et `python3 etude/lignes.py nhl v`, `node etude/assemble.mjs .` (écrit `lib/lignes-model.js`), et vérifier avec `node etude/parite.mjs nba .` puis `nhl` (0 écart attendu). Tout cela est enchaîné par `etude/reentrainement.sh`, lancé chaque lundi par GitHub Actions (`.github/workflows/reentrainement.yml`, secret `DATABASE_URL` requis) : le modèle n'est publié que si les contrôles de `etude/controle.mjs` passent, et l'ancienne version est remise en ligne si le site ne répond plus correctement.
 - Test hors échantillon (janv.–nov. 2026) : 4 premières lignes du soir réussies à 66,6 % en NBA (464 lignes) et 64,3 % en NHL (516 lignes).
 
+## Pages match et fiches joueur (SEO)
+- `lib/match-pages.js` : une page par match (`/match/AAAA-MM-JJ/ext-dom`, `/nhl/match/...`) avec les lignes des deux équipes ; bloc « Sa ligne du soir » des fiches joueur (titre « [Joueur] stats ce soir : Plus ou Moins X points »).
+- Les lignes de tous les joueurs d'un soir viennent de `nightBoard()` (`lib/lignes.js`, gardé 10 min en mémoire). Sitemap : matchs de J-3 à J+2.
+
 ## Ce qui tourne tout seul
 - `xtick` (toutes les 30 min, 8 h–21 h UTC) : lignes du soir par ligue (NBA 18 h, NHL 20 h, heure de Paris), bilan image du lendemain, sondage Plus/Moins et sa réponse, tweet de nouveauté, relevé des statistiques des tweets, et le lundi le bilan de la semaine (`xalgoweek`).
 - `daily` / `evening` : calendrier, feuilles de match, blessures, séries.

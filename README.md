@@ -15,6 +15,11 @@ Build : `npx esbuild functions/index.js --bundle --minify --platform=node --targ
 - Réentraîner : `DATABASE_URL=... node etude/dump.mjs`, puis `python3 etude/lignes.py nba v` et `python3 etude/lignes.py nhl v`, recopier `lignes_nba.json` / `lignes_nhl.json` dans `lib/lignes-model.js`, et vérifier avec `node etude/parite.mjs nba .` (0 écart attendu).
 - Test hors échantillon (janv.–nov. 2026) : 4 premières lignes du soir réussies à 66,6 % en NBA (464 lignes) et 64,3 % en NHL (516 lignes).
 
+## Ce qui tourne tout seul
+- `xtick` (toutes les 30 min, 8 h–21 h UTC) : lignes du soir par ligue (NBA 18 h, NHL 20 h, heure de Paris), bilan image du lendemain, sondage Plus/Moins et sa réponse, tweet de nouveauté, relevé des statistiques des tweets, et le lundi le bilan de la semaine (`xalgoweek`).
+- `daily` / `evening` : calendrier, feuilles de match, blessures, séries.
+- Le Défi du soir est arrêté (14 nov. 2026) : `/defi`, `/collection` et `/album` renvoient vers `/algo` ; le code reste dans `lib/game.js`.
+
 ## Publicité et pages légales
 - Tout est éteint par défaut. Réglages dans la table `site_config` (voir l'en-tête de `lib/ads.js`) : `adsense_client`, `adsense_slots`, `interstitiel`, `editeur`, `hebergeur`.
 - `/ads.txt`, `/mentions-legales`, `/confidentialite` sont servis par la fonction.

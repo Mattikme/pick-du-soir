@@ -5,7 +5,7 @@ import { usDate } from '../lib/ttfl.js';
 import { STATS } from '../lib/trends.js';
 import { fiabilitePage, fiabiliteCsv } from '../lib/fiabilite.js';
 import { nhlHome, nhlPlayer, nhlVisual, nhlVisualSource } from '../lib/nhl-site.js';
-import { planSets, renderCards, cardsTweet, picksOf, loadHist, renderRecap, recapTweet, renderSingle, pollTweet, isStar, algoTweet } from '../lib/xcards.js';
+import { planSets, renderCards, cardsTweet, picksOf, loadHist, renderRecap, recapTweet, renderSingle, pollTweet, isStar, algoTweet, renderWeek } from '../lib/xcards.js';
 import { algoRows, algoTables, settled, lineText } from '../lib/algo.js';
 import { fr1, statName, won } from '../lib/lignes.js';
 import { withAds, adsTxt } from '../lib/ads.js';
@@ -87,7 +87,7 @@ async function xCollectCards() {
 const LINK_TXT = [
   '👉 Toutes les séries du soir, joueur par joueur, avec les 5/10/20 derniers matchs : https://www.pickdusoir.fr',
   '📊 Les autres séries NBA et NHL de ce soir sont sur le site (gratuit) : https://www.pickdusoir.fr',
-  '🃏 Et pour jouer : pose tes pronostics dans le Défi du soir et collectionne les cartes (gratuit, sans mise) : https://www.pickdusoir.fr/defi',
+  '📈 Les lignes du soir, Plus ou Moins, avec la projection de chaque joueur (gratuit) : https://www.pickdusoir.fr/algo',
 ];
 async function xReplyLink(tweetId, day) {
   await sql.query(`CREATE TABLE IF NOT EXISTS x_reply (day date PRIMARY KEY, tweet_id text, parent text, ts timestamptz DEFAULT now())`);
@@ -218,6 +218,32 @@ async function xAlgoRecap(league, dry) {
   await sql.query(`INSERT INTO algo_recaps (day, league, tweet_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [row.day, league, id]);
   return { tweet: id };
 }
+// Bilan de la semaine (le lundi, heure de Paris) : toutes les lignes des 7 derniers jours, NBA et NHL, jour par jour
+const parisDate = (t = Date.now()) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris' }).format(new Date(t));
+const addDays = (ymd, n) => new Date(Date.parse(ymd + 'T12:00:00Z') + n * 864e5).toISOString().slice(0, 10);
+async function xAlgoWeek(dry, force) {
+  await algoTables();
+  await sql.query(`CREATE TABLE IF NOT EXISTS algo_weeks (week date PRIMARY KEY, tweet_id text, ts timestamptz DEFAULT now())`);
+  const today = parisDate();
+  if (!dry && !force && new Date(today + 'T12:00:00Z').getUTCDay() !== 1) return 'le lundi seulement';
+  const from = addDays(today, -7), to = addDays(today, -1);
+  const [done] = await sql.query(`SELECT 1 FROM algo_weeks WHERE week = $1`, [from]);
+  if (done && !dry) return 'déjà fait';
+  const [cfg] = await sql.query(`SELECT bool_or(enabled) AS on FROM x_config`);
+  if (!dry && !cfg?.on) return 'désactivé';
+  const all = await settled(), rows = all.filter((r) => r.day >= from && r.day <= to);
+  if (rows.length < 8) return `pas assez de lignes cette semaine (${rows.length})`;
+  const cnt = (a) => ({ ok: a.filter((r) => r.ok).length, n: a.length }), week = cnt(rows), total = cnt(all), nba = cnt(rows.filter((r) => r.league === 'nba')), nhl = cnt(rows.filter((r) => r.league === 'nhl'));
+  const byDay = new Map(); for (const r of [...rows].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.league < b.league ? -1 : a.league > b.league ? 1 : a.rank - b.rank))) { if (!byDay.has(r.day)) byDay.set(r.day, []); byDay.get(r.day).push(r.ok); }
+  const days = [...byDay].map(([d, marks]) => ({ label: new Intl.DateTimeFormat('fr-FR', { timeZone: 'UTC', weekday: 'long', day: 'numeric' }).format(new Date(d + 'T12:00:00Z')), marks }));
+  const parts = [nba.n ? `🏀 NBA ${nba.ok}/${nba.n}` : '', nhl.n ? `🏒 NHL ${nhl.ok}/${nhl.n}` : ''].filter(Boolean).join(' · ');
+  const text = `📊 Bilan de la semaine : ${week.ok}/${week.n} lignes réussies (${Math.round(week.ok / week.n * 100)} %)\n\n${parts}\n\nChaque ligne est publiée avant le match, puis vérifiée. Les ratés restent affichés.\n\nStats informatives, pas un conseil de pari.\n#NBA #NHL #TeamParieur`;
+  let png = null; try { png = await renderWeek(days, week, total, `${dayFR(from).split(' ').slice(1).join(' ')} – ${dayFR(to).split(' ').slice(1).join(' ')}`); } catch (e) { console.error('bilan semaine', e); }
+  if (dry) return { dry: true, semaine: `${from} → ${to}`, text, longueur: text.length, bytes: png?.length, jours: days.map((d) => `${d.label} ${d.marks.filter(Boolean).length}/${d.marks.length}`) };
+  const id = await xTweet(text, png ? await xUpload(png, process.env) : null, process.env);
+  await sql.query(`INSERT INTO algo_weeks (week, tweet_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [from, id]);
+  return { tweet: id };
+}
 // Tweets en cartes : une image 2x2 par thème, créneaux fixes (heure de Paris)
 async function xCards(league, dry, only) {
   await xTables();
@@ -331,6 +357,7 @@ async function xTick() {
   }
   if (h >= 8) await run('reponse_sondage', () => xPollAnswer(false));
   if (h >= 9) await run('news', () => xNews(false));
+  if (h >= 10) await run('bilan_semaine', () => xAlgoWeek(false));
   for (const league of ['nba', 'nhl']) await run('lignes_' + league, () => xAlgo(league, false));
   if (h >= 18) await run('sondage', () => xPoll(false));
   return out;
@@ -371,7 +398,6 @@ async function runJob(job, q) {
     out.injuries = await syncInjuries();
     out.trends = await buildTrends();
     out.nhl = await nhlDaily();
-    try { out.defi = await (await import('../lib/game.js')).settleGame(); } catch (e) { out.defi = String(e).slice(0, 200); }
   } else if (job === 'evening') {   // avant les matchs : blessures à jour + séries recalculées
     out.injuries = await syncInjuries();
     out.trends = await buildTrends();
@@ -406,6 +432,7 @@ async function runJob(job, q) {
   else if (job === 'gsettle') { out.defi = await (await import('../lib/game.js')).settleGame(); }
   else if (job === 'xpoll') { out.poll = await xPoll(q.get('post') !== '1'); }
   else if (job === 'xalgo') { out.algo = await xAlgo(q.get('league') === 'nhl' ? 'nhl' : 'nba', q.get('post') !== '1'); }
+  else if (job === 'xalgoweek') { out.week = await xAlgoWeek(q.get('post') !== '1', q.get('force') === '1'); }
   else if (job === 'xalgorecap') { out.algo = await xAlgoRecap(q.get('league') === 'nhl' ? 'nhl' : 'nba', q.get('post') !== '1'); }
   else if (job === 'xpollanswer') { out.answer = await xPollAnswer(q.get('post') !== '1'); }
   else if (job === 'xdefi') { out.defi = await xDefi(q.get('post') !== '1'); }
@@ -537,7 +564,8 @@ export default {
         await sql.query(`INSERT INTO page_views (path, ref, vh, bot, ih) VALUES ($1,$2,$3,$4,$3)`, [path, ref, vh, bot]);
       } catch (e) { console.error('views', String(e).slice(0, 120)); }
     }
-    if (path === '/defi' || path.startsWith('/defi/') || path === '/collection' || path === '/album') { const { handleGame } = await import('../lib/game.js'); return handleGame(request, url); }
+    // Défi du soir arrêté (14 nov. 2026) : ses pages renvoient vers les lignes du soir. Le code du jeu reste dans lib/game.js.
+    if (path === '/defi' || path.startsWith('/defi/') || path === '/collection' || path === '/album') return new Response(null, { status: 302, headers: { location: '/algo' } });
     if (path === '/idees') {
       await sql.query(`CREATE TABLE IF NOT EXISTS ideas (id bigserial PRIMARY KEY, ts timestamptz DEFAULT now(), idea text, contact text, vh text)`);
       if (request.method === 'POST') {

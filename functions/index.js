@@ -8,7 +8,7 @@ import { nhlHome, nhlPlayer, nhlVisual, nhlVisualSource } from '../lib/nhl-site.
 import { planSets, renderCards, cardsTweet, picksOf, loadHist, renderRecap, recapTweet, renderSingle, pollTweet, isStar, algoTweet, renderWeek } from '../lib/xcards.js';
 import { algoRows, algoTables, settled, lineText } from '../lib/algo.js';
 import { fr1, statName, won } from '../lib/lignes.js';
-import { matchPage } from '../lib/match-pages.js';
+import { matchPage, saveLines } from '../lib/match-pages.js';
 import { programmePage } from '../lib/programme.js';
 import { teamPage } from '../lib/team-pages.js';
 import { withAds, adsTxt } from '../lib/ads.js';
@@ -393,6 +393,13 @@ async function xPost(league, dry, slot) {
   return { tweet: id, media, bytes: png.length, text };
 }
 
+// Fige les lignes des matchs à venir (ce soir) pour les pages match (résultat réel comparé à la ligne d'avant-match)
+async function freezeLines() {
+  const out = {};
+  for (const lg of ['nba', 'nhl']) { try { out[lg] = await saveLines(lg); } catch (e) { out[lg] = { error: String(e) }; } }
+  return out;
+}
+
 async function runJob(job, q) {
   const out = {};
   if (job === 'daily') {            // matin (heure FR) : résultats de la nuit + picks
@@ -401,11 +408,14 @@ async function runJob(job, q) {
     out.injuries = await syncInjuries();
     out.trends = await buildTrends();
     out.nhl = await nhlDaily();
+    out.lines = await freezeLines();
   } else if (job === 'evening') {   // avant les matchs : blessures à jour + séries recalculées
     out.injuries = await syncInjuries();
     out.trends = await buildTrends();
     out.nhl = { injuries: await nhlInjuries(), trends: await nhlTrends() };
+    out.lines = await freezeLines();
   }
+  else if (job === 'lines') out.lines = await freezeLines();
   else if (job === 'nhlboot') Object.assign(out, await nhlBootstrap());
   else if (job === 'nhlback') { out.back = await nhlBackfill(+q.get('season'), +q.get('from'), +q.get('to')); out.trends = await nhlTrends(); }
   else if (job === 'nhldaily') out.nhl = await nhlDaily();

@@ -17,6 +17,7 @@ Build : `npx esbuild functions/index.js --bundle --minify --platform=node --targ
 
 ## Pages match et fiches joueur (SEO)
 - `lib/match-pages.js` : une page par match (`/match/AAAA-MM-JJ/ext-dom`, `/nhl/match/...`) avec les lignes des deux équipes ; bloc « Sa ligne du soir » des fiches joueur (titre « [Joueur] stats ce soir : Plus ou Moins X points »).
+- `lib/programme.js` : pages « Matchs NBA ce soir » (`/matchs-nba-ce-soir`) et NHL (`/matchs-nhl-ce-soir`), programme du prochain soir en heure de Paris avec un lien vers chaque page match ; bandeau sur les accueils NBA/NHL et lien en pied de page.
 - Les lignes de tous les joueurs d'un soir viennent de `nightBoard()` (`lib/lignes.js`, gardé 10 min en mémoire). Sitemap : matchs de J-3 à J+2.
 
 ## Ce qui tourne tout seul

@@ -9,4 +9,17 @@ Site de stats NBA/NHL (séries / hit-rate) + publication automatique sur X. Fonc
 
 Build : `npx esbuild functions/index.js --bundle --minify --platform=node --target=node24 --format=esm --loader:.txt=text --outfile=dist/index.mjs`
 
+## Lignes du soir (Plus/Moins)
+- `lib/lignes.js` : ligne de référence au demi-point par joueur et par stat, probabilité Plus/Moins, sélection du soir. `lib/algo.js` : suivi public (table `algo_picks`).
+- `lib/lignes-model.js` : coefficients générés par `etude/lignes.py` (ne pas modifier à la main).
+- Réentraîner : `DATABASE_URL=... node etude/dump.mjs`, puis `python3 etude/lignes.py nba v` et `python3 etude/lignes.py nhl v`, recopier `lignes_nba.json` / `lignes_nhl.json` dans `lib/lignes-model.js`, et vérifier avec `node etude/parite.mjs nba .` (0 écart attendu).
+- Test hors échantillon (janv.–nov. 2026) : 4 premières lignes du soir réussies à 66,6 % en NBA (464 lignes) et 64,3 % en NHL (516 lignes).
+
+## Publicité et pages légales
+- Tout est éteint par défaut. Réglages dans la table `site_config` (voir l'en-tête de `lib/ads.js`) : `adsense_client`, `adsense_slots`, `interstitiel`, `editeur`, `hebergeur`.
+- `/ads.txt`, `/mentions-legales`, `/confidentialite` sont servis par la fonction.
+
+## Base
+- `migrations/` : scripts à exécuter une fois sur la base avant de publier la version correspondante.
+
 Légal (ANJ) : stats informatives, pas de cotes, mention « Stats informatives, pas un conseil de pari. »

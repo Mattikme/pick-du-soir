@@ -12,7 +12,7 @@ Build : `npx esbuild functions/index.js --bundle --minify --platform=node --targ
 ## Lignes du soir (Plus/Moins)
 - `lib/lignes.js` : ligne de référence au demi-point par joueur et par stat, probabilité Plus/Moins, sélection du soir. `lib/algo.js` : suivi public (table `algo_picks`).
 - `lib/lignes-model.js` : coefficients générés par `etude/lignes.py` (ne pas modifier à la main).
-- Réentraîner : `DATABASE_URL=... node etude/dump.mjs`, puis `python3 etude/lignes.py nba v` et `python3 etude/lignes.py nhl v`, `node etude/assemble.mjs .` (écrit `lib/lignes-model.js`), et vérifier avec `node etude/parite.mjs nba .` puis `nhl` (0 écart attendu). Ce réentraînement n'est pas encore automatisé.
+- Réentraîner : `DATABASE_URL=... node etude/dump.mjs`, puis `python3 etude/lignes.py nba v` et `python3 etude/lignes.py nhl v`, `node etude/assemble.mjs .` (écrit `lib/lignes-model.js`), et vérifier avec `node etude/parite.mjs nba .` puis `nhl` (0 écart attendu). Tout cela est enchaîné par `etude/reentrainement.sh`, lancé chaque lundi par GitHub Actions (`.github/workflows/reentrainement.yml`, secret `DATABASE_URL` requis) : le modèle n'est publié que si les contrôles de `etude/controle.mjs` passent, et l'ancienne version est remise en ligne si le site ne répond plus correctement.
 - Test hors échantillon (janv.–nov. 2026) : 4 premières lignes du soir réussies à 66,6 % en NBA (464 lignes) et 64,3 % en NHL (516 lignes).
 
 ## Ce qui tourne tout seul

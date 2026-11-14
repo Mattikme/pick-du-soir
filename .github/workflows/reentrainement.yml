@@ -1,0 +1,44 @@
+# Chaque lundi : le modèle des lignes réapprend avec les derniers matchs. Il n'est publié que si tous les contrôles passent.
+# Nécessite le secret DATABASE_URL (Settings → Secrets and variables → Actions). Sans ce secret, la tâche ne fait rien.
+name: Réentraînement du modèle
+on:
+  schedule:
+    - cron: '47 10 * * 1'   # lundi, 11 h 47 à Paris en hiver (12 h 47 en été)
+  workflow_dispatch:
+    inputs:
+      publier:
+        description: 'Publier le modèle si les contrôles passent'
+        type: boolean
+        default: true
+permissions:
+  contents: write
+concurrency:
+  group: reentrainement
+  cancel-in-progress: false
+jobs:
+  reentrainer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pandas scikit-learn numpy
+      - run: npm ci
+      - name: Réentraîner, contrôler, publier
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PUBLIER: ${{ (github.event_name == 'schedule' || inputs.publier) && '1' || '0' }}
+        run: bash etude/reentrainement.sh
+      - name: Enregistrer le nouveau modèle dans le dépôt
+        run: |
+          if git diff --quiet -- lib/lignes-model.js; then echo "Modèle inchangé."; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/lignes-model.js
+          git commit -m "Modèle des lignes réentraîné ($(date -u +%d/%m/%Y))"
+          git push

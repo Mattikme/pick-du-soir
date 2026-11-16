@@ -112,7 +112,7 @@ async function xPoll(dry) {
   const [cfg] = await sql.query(`SELECT bool_or(enabled) AS on FROM x_config`);
   if (!dry && !cfg?.on) return 'désactivé';
   const recent = new Set((await sql.query(`SELECT pid FROM x_poll WHERE day >= $1::date - 4`, [today])).map((r) => r.pid)); // pas le même joueur deux fois de suite
-  for (const lg of ['nba', 'nhl']) {
+  for (const lg of ['nba']) {
     const pool = (await algoRows(today, { league: lg, refs: true })).filter((c) => isStar(lg, c.name) && c.start_utc && new Date(c.start_utc).getTime() > Date.now() + 60 * 6e4)
       .sort((a, b) => recent.has(a.player_id) - recent.has(b.player_id) || b.avg10 - a.avg10);
     const c = pool[0];
@@ -240,7 +240,7 @@ async function xAlgoWeek(dry, force) {
   const byDay = new Map(); for (const r of [...rows].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.league < b.league ? -1 : a.league > b.league ? 1 : a.rank - b.rank))) { if (!byDay.has(r.day)) byDay.set(r.day, []); byDay.get(r.day).push(r.ok); }
   const days = [...byDay].map(([d, marks]) => ({ label: new Intl.DateTimeFormat('fr-FR', { timeZone: 'UTC', weekday: 'long', day: 'numeric' }).format(new Date(d + 'T12:00:00Z')), marks }));
   const parts = [nba.n ? `🏀 NBA ${nba.ok}/${nba.n}` : '', nhl.n ? `🏒 NHL ${nhl.ok}/${nhl.n}` : ''].filter(Boolean).join(' · ');
-  const text = `📊 Bilan de la semaine : ${week.ok}/${week.n} lignes réussies (${Math.round(week.ok / week.n * 100)} %)\n\n${parts}\n\nChaque ligne est publiée avant le match, puis vérifiée. Les ratés restent affichés.\n\nStats informatives, pas un conseil de pari.\n#NBA #NHL #TeamParieur`;
+  const text = `📊 Bilan de la semaine : ${week.ok}/${week.n} lignes réussies (${Math.round(week.ok / week.n * 100)} %)\n\n${parts}\n\nChaque ligne est publiée avant le match, puis vérifiée. Les ratés restent affichés.\n\nStats informatives, pas un conseil de pari.\n#NBA #TeamParieur`;
   let png = null; try { png = await renderWeek(days, week, total, `${dayFR(from).split(' ').slice(1).join(' ')} – ${dayFR(to).split(' ').slice(1).join(' ')}`); } catch (e) { console.error('bilan semaine', e); }
   if (dry) return { dry: true, semaine: `${from} → ${to}`, text, longueur: text.length, bytes: png?.length, jours: days.map((d) => `${d.label} ${d.marks.filter(Boolean).length}/${d.marks.length}`) };
   const id = await xTweet(text, png ? await xUpload(png, process.env) : null, process.env);
@@ -356,12 +356,12 @@ async function xTick() {
   await run('collect_cards', xCollectCards);
   if (h >= 8) for (const league of ['nba', 'nhl']) {
     await run('bilan_series_' + league, async () => ((await sql.query(`SELECT enabled FROM x_config WHERE league = $1`, [league]))[0]?.enabled ? xRecap(league, false) : 'désactivé')); // solde des dernières cartes de séries
-    await run('bilan_lignes_' + league, () => xAlgoRecap(league, false));
+    if (league === 'nba') await run('bilan_lignes_' + league, () => xAlgoRecap(league, false)); // lignes : NBA seulement
   }
   if (h >= 8) await run('reponse_sondage', () => xPollAnswer(false));
   if (h >= 9) await run('news', () => xNews(false));
   if (h >= 10) await run('bilan_semaine', () => xAlgoWeek(false));
-  for (const league of ['nba', 'nhl']) await run('lignes_' + league, () => xAlgo(league, false));
+  await run('lignes_nba', () => xAlgo('nba', false)); // lignes NHL arrêtées (16 nov. 2026) : tirs cadrés non proposés en France
   if (h >= 18) await run('sondage', () => xPoll(false));
   return out;
 }
@@ -396,7 +396,7 @@ async function xPost(league, dry, slot) {
 // Fige les lignes des matchs à venir (ce soir) pour les pages match (résultat réel comparé à la ligne d'avant-match)
 async function freezeLines() {
   const out = {};
-  for (const lg of ['nba', 'nhl']) { try { out[lg] = await saveLines(lg); } catch (e) { out[lg] = { error: String(e) }; } }
+  for (const lg of ['nba']) { try { out[lg] = await saveLines(lg); } catch (e) { out[lg] = { error: String(e) }; } }
   return out;
 }
 
@@ -602,7 +602,8 @@ export default {
     const origin = 'https://' + url.host;
     const html = async (body, status = 200) => new Response(await withAds(await withVis(body)), { status, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=300' } });
     if (path === '/') return html(await homePage(origin, q));
-    if (path === '/algo') return html(await algoPage(origin, q));
+    if (path === '/algo') return q.get('sport') === 'nhl' ? new Response(null, { status: 301, headers: { location: '/algo' } }) : html(await algoPage(origin, q));
+    if (path === '/matchs-nhl-ce-soir' || path.startsWith('/nhl/match/')) return new Response(null, { status: 301, headers: { location: '/nhl' } }); // lignes NHL arrêtées
     if (path === '/mentions-legales' || path === '/confidentialite') return html(await legalPage(path, origin));
     if (path === '/ads.txt') return new Response(await adsTxt(), { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'public, max-age=3600' } });
     if (path === '/roadmap') return html(roadmapPage(origin));

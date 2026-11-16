@@ -1,9 +1,12 @@
-# Chaque lundi : le modèle des lignes réapprend avec les derniers matchs. Il n'est publié que si tous les contrôles passent.
+# Le modèle des lignes réapprend chaque semaine avec les derniers matchs. Il n'est publié que si tous les contrôles passent.
+# GitHub saute parfois des tâches planifiées : la tâche est donc tentée deux fois par jour et ne fait le travail
+# que si le dernier réentraînement date de plus de 6 jours. Une semaine manquée est rattrapée au passage suivant.
 # Nécessite le secret DATABASE_URL (Settings → Secrets and variables → Actions). Sans ce secret, la tâche ne fait rien.
 name: Réentraînement du modèle
 on:
   schedule:
-    - cron: '47 10 * * 1'   # lundi, 11 h 47 à Paris en hiver (12 h 47 en été)
+    - cron: '47 10 * * *'   # tous les jours, 11 h 47 à Paris en hiver
+    - cron: '23 16 * * *'   # second essai, 17 h 23 à Paris en hiver
   workflow_dispatch:
     inputs:
       publier:
@@ -21,24 +24,41 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+        with:
+          fetch-depth: 0
+      - name: Faut-il réentraîner ?
+        id: due
+        run: |
+          last=$(git log -1 --format=%ct -- lib/lignes-model.js || echo 0)
+          age=$(( ( $(date +%s) - ${last:-0} ) / 86400 ))
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$age" -ge 6 ]; then
+            echo "run=1" >> "$GITHUB_OUTPUT"; echo "Dernier réentraînement il y a $age jour(s) : on y va."
+          else
+            echo "run=0" >> "$GITHUB_OUTPUT"; echo "Dernier réentraînement il y a $age jour(s) : rien à faire."
+          fi
+      - if: steps.due.outputs.run == '1'
+        uses: actions/setup-node@v4
         with:
           node-version: 22
-      - uses: actions/setup-python@v5
+      - if: steps.due.outputs.run == '1'
+        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install pandas scikit-learn numpy
-      - run: npm ci
+      - if: steps.due.outputs.run == '1'
+        run: pip install pandas scikit-learn numpy && npm ci
       - name: Réentraîner, contrôler, publier
+        if: steps.due.outputs.run == '1'
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           PUBLIER: ${{ (github.event_name == 'schedule' || inputs.publier) && '1' || '0' }}
         run: bash etude/reentrainement.sh
       - name: Enregistrer le nouveau modèle dans le dépôt
+        if: steps.due.outputs.run == '1'
         run: |
           if git diff --quiet -- lib/lignes-model.js; then echo "Modèle inchangé."; exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add lib/lignes-model.js
           git commit -m "Modèle des lignes réentraîné ($(date -u +%d/%m/%Y))"
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
           git push

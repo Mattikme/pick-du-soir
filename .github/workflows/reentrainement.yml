@@ -15,9 +15,6 @@ on:
         default: true
 permissions:
   contents: write
-concurrency:
-  group: reentrainement
-  cancel-in-progress: false
 jobs:
   reentrainer:
     runs-on: ubuntu-latest

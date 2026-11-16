@@ -25,7 +25,9 @@ if [ "${PUBLIER:-0}" != "1" ]; then annuler; echo "Essai à blanc : contrôles p
 
 construire() { npx --yes esbuild functions/index.js --bundle --minify --platform=node --target=node24 --format=esm --loader:.txt=text --log-level=error --outfile=dist/index.mjs && node --check dist/index.mjs; }
 site_ok() { for p in "/algo" "/algo?sport=nhl"; do s="?"; case "$p" in *\?*) s="&";; esac
-  curl -fsS -m 40 "https://www.pickdusoir.fr$p${s}v=$(date +%s)" | grep -q "Plus ou moins" || return 1; done; }
+  # page entière lue d'abord : un « curl | grep -q » échoue à tort avec pipefail (grep ferme le tuyau avant la fin)
+  html="$(curl -fsS -m 40 "https://www.pickdusoir.fr$p${s}v=$(date +%s)")" || return 1
+  case "$html" in *"Plus ou moins"*) ;; *) return 1;; esac; done; }
 ( umask 077; printf '%s' "$DATABASE_URL" > "$T/db.url" )
 construire
 node publish.mjs "$T/db.url"

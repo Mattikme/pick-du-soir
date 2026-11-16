@@ -188,12 +188,8 @@ async function xAlgo(league, dry) {
   const id = await xTweet(text, await xUpload(png, process.env), process.env);
   await sql.query(`INSERT INTO x_cards (league, day, key, tweet_id, text, slot, picks) VALUES ($1,$2,'algo',$3,$4,$5,$6) ON CONFLICT DO NOTHING`, [league, today, id, text, slot, JSON.stringify(picksOf(st))]);
   for (const [i, c] of st.cards.entries()) await sql.query(`INSERT INTO algo_picks (day, rank, pid, name, stat, thr, p, gid, side, league) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT DO NOTHING`, [today, i + 1, c.pid, c.name, c.stat, c.thr, c.prob, c.gid, c.side, league]);
-  let lien = null;
-  try { // une seule réponse avec lien par jour (un tweet avec lien est moins diffusé)
-    const [r0] = await sql.query(`SELECT 1 FROM x_reply WHERE day = $1`, [today]);
-    if (!r0) { const rid = await xTweet(`👉 Toutes les lignes du soir, avec la projection de chaque joueur et nos résultats publics (gratuit) : https://www.pickdusoir.fr/algo${league === 'nhl' ? '?sport=nhl' : ''}`, null, process.env, id); await sql.query(`INSERT INTO x_reply (day, tweet_id, parent) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [today, rid, id]); lien = rid; }
-  } catch (e) { lien = { error: String(e).slice(0, 200) }; }
-  return { tweet: id, lien };
+  // réponse avec lien retirée (16 nov. 2026) : trop peu d'impressions
+  return { tweet: id };
 }
 // Bilan des lignes de la veille : image ✅/❌ + total depuis le lancement, ratés compris
 async function xAlgoRecap(league, dry) {
@@ -268,7 +264,7 @@ async function xCards(league, dry, only) {
     try { await loadHist(sql, league, st.cards, STATS); } catch {}
     const png = await renderCards(st);
     const id = await xTweet(text, await xUpload(png, process.env), process.env);
-    try { out.lien = await xReplyLink(id, today); } catch (e) { out.lien = { error: String(e).slice(0, 200) }; }
+    // réponse avec lien retirée (16 nov. 2026) : trop peu d'impressions
     await sql.query(`INSERT INTO x_cards (league, day, key, tweet_id, text, slot, picks) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`, [league, today, st.key, id, text, st.slot, JSON.stringify(picksOf(st))]);
     if (cfg?.test_once) await sql.query(`UPDATE x_config SET test_once = false WHERE league = $1`, [league]);
     out[st.key] = { tweet: id };

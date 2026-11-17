@@ -470,12 +470,24 @@ async function picksApi(q) {
 }
 
 let visCache = { t: 0, html: '' };
+// Graphique des visiteurs uniques par jour (30 derniers jours), en SVG dans le pied de page
+function visChart(rows) {
+  if (!rows.length) return '';
+  const W = 300, H = 64, gap = 2, bw = (W - gap * (rows.length - 1)) / rows.length, max = Math.max(1, ...rows.map((r) => r.n));
+  const fr = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+  const bars = rows.map((r, i) => { const h = r.n ? Math.max(2, (r.n / max) * (H - 4)) : 1; const last = i === rows.length - 1;
+    return `<rect x="${(i * (bw + gap)).toFixed(1)}" y="${(H - h).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="1.5" fill="var(--ball)" opacity="${last ? 1 : r.n ? 0.75 : 0.2}"><title>${fr(r.day)} : ${r.n} visiteur${r.n > 1 ? 's' : ''}</title></rect>`; }).join('');
+  return `<figure class="vchart"><figcaption>Visiteurs par jour, 30 derniers jours (max ${max})</figcaption><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Visiteurs par jour sur 30 jours, maximum ${max}">${bars}</svg><div class="vaxis"><span>${fr(rows[0].day)}</span><span>aujourd'hui</span></div></figure>`;
+}
 async function withVis(body) {
   if (Date.now() - visCache.t > 60000) {
     try {
       const [d] = await sql.query(`SELECT count(DISTINCT ih)::int AS n FROM page_views WHERE NOT bot AND ih IS NOT NULL AND day = current_date`);
       const [m] = await sql.query(`SELECT count(DISTINCT ih)::int AS n FROM page_views WHERE NOT bot AND ih IS NOT NULL AND day >= date_trunc('month', current_date)`);
-      visCache = { t: Date.now(), html: `<span>👀 ${d.n} visiteur${d.n > 1 ? 's' : ''} aujourd'hui</span><span>📅 ${m.n} ce mois-ci</span>` };
+      let chart = '';
+      try { chart = visChart(await sql.query(`SELECT s.day::date::text AS day, count(DISTINCT v.ih)::int AS n FROM generate_series(current_date - 29, current_date, interval '1 day') s(day)
+        LEFT JOIN page_views v ON v.day = s.day::date AND NOT v.bot AND v.ih IS NOT NULL GROUP BY s.day ORDER BY s.day`)); } catch { chart = ''; }
+      visCache = { t: Date.now(), html: `<span>👀 ${d.n} visiteur${d.n > 1 ? 's' : ''} aujourd'hui</span><span>📅 ${m.n} ce mois-ci</span>${chart}` };
     } catch { visCache = { t: Date.now(), html: '' }; }
   }
   return body.replace('<!--VIS-->', visCache.html);

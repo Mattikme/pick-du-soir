@@ -6,7 +6,7 @@
     "node": "22.x"
   },
   "scripts": {
-    "build": "esbuild functions/index.js --bundle --minify --platform=node --target=node22 --format=esm --loader:.txt=text --log-level=error --outfile=dist/index.mjs && node --check dist/index.mjs && mkdir -p public"
+    "build": "esbuild functions/index.js --bundle --minify --platform=node --target=node22 --format=esm --loader:.txt=text --log-level=error --outfile=dist/index.mjs && node --check dist/index.mjs && mkdir -p public && date -u +%FT%TZ > public/_build.txt"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.0.0",

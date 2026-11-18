@@ -1,8 +1,6 @@
 # Le modèle des lignes réapprend chaque semaine avec les derniers matchs. Il n'est publié que si tous les contrôles passent.
 # GitHub saute parfois des tâches planifiées : la tâche est donc tentée deux fois par jour et ne fait le travail
 # que si le dernier réentraînement date de plus de 6 jours. Une semaine manquée est rattrapée au passage suivant.
-# Le modèle est enregistré dans le dépôt (lib/lignes-model.js) : Vercel redéploie le site, puis la tâche vérifie le déploiement
-# et le site, et annule le commit (git revert) si quelque chose ne va pas.
 # Nécessite le secret DATABASE_URL (Settings → Secrets and variables → Actions). Sans ce secret, la tâche ne fait rien.
 name: Réentraînement du modèle
 on:
@@ -17,8 +15,6 @@ on:
         default: true
 permissions:
   contents: write
-  statuses: read
-  deployments: read
 jobs:
   reentrainer:
     runs-on: ubuntu-latest
@@ -47,14 +43,13 @@ jobs:
           python-version: '3.12'
       - if: steps.due.outputs.run == '1'
         run: pip install pandas scikit-learn numpy && npm ci
-      - name: Réentraîner et contrôler
+      - name: Réentraîner, contrôler, publier
         if: steps.due.outputs.run == '1'
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           PUBLIER: ${{ (github.event_name == 'schedule' || inputs.publier) && '1' || '0' }}
         run: bash etude/reentrainement.sh
       - name: Enregistrer le nouveau modèle dans le dépôt
-        id: commit
         if: steps.due.outputs.run == '1'
         run: |
           if git diff --quiet -- lib/lignes-model.js; then echo "Modèle inchangé."; exit 0; fi
@@ -64,33 +59,3 @@ jobs:
           git commit -m "Modèle des lignes réentraîné ($(date -u +%d/%m/%Y))"
           git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
           git push
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      - name: Vérifier le déploiement Vercel et le site
-        if: steps.commit.outputs.sha != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SHA: ${{ steps.commit.outputs.sha }}
-          SITE_URL: ${{ secrets.SITE_URL }}
-        run: |
-          site="${SITE_URL:-https://www.pickdusoir.fr}"; site="${site%/}"
-          # 1. attendre le statut « Vercel » posé sur le commit (jusqu'à 10 min)
-          etat=pending
-          for i in $(seq 1 40); do
-            etat=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${SHA}/statuses" --jq '[.[] | select(.context | test("vercel"; "i"))][0].state // "pending"')
-            [ "$etat" != "pending" ] && break; sleep 15
-          done
-          echo "Déploiement Vercel : $etat"
-          ok=1; [ "$etat" = "success" ] || ok=0
-          # 2. le site répond-il avec les lignes du soir ?
-          if [ "$ok" = 1 ]; then
-            sleep 20
-            for p in "/algo" "/algo?sport=nhl"; do s="?"; case "$p" in *\?*) s="&";; esac
-              html="$(curl -fsSL -m 40 "$site$p${s}v=$(date +%s)")" || { ok=0; break; }
-              case "$html" in *"Plus ou moins"*) ;; *) ok=0; break;; esac
-            done
-          fi
-          if [ "$ok" = 1 ]; then echo "Nouveau modèle en ligne et site vérifié."; exit 0; fi
-          git revert --no-edit "$SHA"
-          git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
-          git push
-          echo "::error::Déploiement ou site en échec : commit du modèle annulé, ancienne version redéployée."; exit 1

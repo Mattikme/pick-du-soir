@@ -1,0 +1,42 @@
+# Tâches planifiées du site (remplacent les déclencheurs Neon) : appelle /run?job=...&key=CRON_SECRET.
+# Secrets requis (Settings → Secrets and variables → Actions) : SITE_URL (ex. https://www.pickdusoir.fr) et CRON_SECRET.
+# Heures en UTC. GitHub peut retarder une tâche planifiée de quelques minutes.
+name: Tâches planifiées
+on:
+  schedule:
+    - cron: '0,30 8-21 * * *'   # xtick toutes les 30 min, 8 h–21 h UTC
+    - cron: '0 9 * * *'         # daily
+    - cron: '0 21 * * *'        # evening
+  workflow_dispatch:
+    inputs:
+      job:
+        description: 'Tâche à lancer (xtick, daily, evening, …)'
+        required: true
+        default: xtick
+concurrency:
+  group: tache-${{ github.event.schedule || inputs.job }}
+  cancel-in-progress: false
+permissions: {}
+jobs:
+  lancer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Appeler le site
+        env:
+          SITE_URL: ${{ secrets.SITE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          SCHEDULE: ${{ github.event.schedule }}
+          INPUT_JOB: ${{ inputs.job }}
+        run: |
+          if [ -z "$SITE_URL" ] || [ -z "$CRON_SECRET" ]; then echo "::warning::Secrets SITE_URL ou CRON_SECRET absents : rien lancé."; exit 0; fi
+          case "$SCHEDULE" in
+            '0 9 * * *')  job=daily ;;
+            '0 21 * * *') job=evening ;;
+            '')           job="$INPUT_JOB" ;;
+            *)            job=xtick ;;
+          esac
+          echo "Tâche : $job"
+          code=$(curl -sS -o out.json -w '%{http_code}' -m 90 --get "${SITE_URL%/}/run" --data-urlencode "job=$job" --data-urlencode "key=$CRON_SECRET") || code=000
+          head -c 2000 out.json 2>/dev/null; echo
+          [ "$code" = "200" ] || { echo "::error::$job : HTTP $code"; exit 1; }

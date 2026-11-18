@@ -1,6 +1,12 @@
 {
-  "crons": [
-    { "path": "/api/ingest?job=daily", "schedule": "0 9 * * *" },
-    { "path": "/api/ingest?job=evening", "schedule": "0 21 * * *" }
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "npm run build",
+  "outputDirectory": "public",
+  "regions": ["fra1"],
+  "functions": {
+    "api/index.js": { "maxDuration": 60 }
+  },
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/api/index" }
   ]
 }

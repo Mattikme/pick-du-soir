@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Réentraînement du modèle des lignes, de bout en bout : export des matchs, apprentissage, contrôles, publication, vérification du site.
-# Lancé chaque lundi par .github/workflows/reentrainement.yml. À la main : DATABASE_URL=... PUBLIER=1 bash etude/reentrainement.sh
-# Sans PUBLIER=1, tout est calculé et contrôlé mais rien n'est publié ni modifié (essai à blanc).
+# Réentraînement du modèle des lignes : export des matchs, apprentissage, contrôles, vérification du build.
+# Lancé par .github/workflows/reentrainement.yml. À la main : DATABASE_URL=... PUBLIER=1 bash etude/reentrainement.sh
+# Avec PUBLIER=1, le nouveau modèle reste dans lib/lignes-model.js : le workflow l'enregistre dans le dépôt,
+# ce qui déclenche le déploiement Vercel. Sans PUBLIER=1, tout est calculé et contrôlé puis l'ancien modèle est remis (essai à blanc).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 if [ -z "${DATABASE_URL:-}" ]; then echo "::warning::Secret DATABASE_URL absent : réentraînement non fait."; exit 0; fi
@@ -21,20 +22,6 @@ node "$ROOT/etude/parite.mjs" nhl "$T"
 node "$ROOT/etude/controle.mjs" "$T/ancien-modele.mjs"
 
 cd "$ROOT"
+npm run build --silent                    # le site doit se construire avec le nouveau modèle
 if [ "${PUBLIER:-0}" != "1" ]; then annuler; echo "Essai à blanc : contrôles passés, rien de publié."; exit 0; fi
-
-construire() { npx --yes esbuild functions/index.js --bundle --minify --platform=node --target=node24 --format=esm --loader:.txt=text --log-level=error --outfile=dist/index.mjs && node --check dist/index.mjs; }
-site_ok() { for p in "/algo" "/algo?sport=nhl"; do s="?"; case "$p" in *\?*) s="&";; esac
-  # page entière lue d'abord : un « curl | grep -q » échoue à tort avec pipefail (grep ferme le tuyau avant la fin)
-  html="$(curl -fsS -m 40 "https://www.pickdusoir.fr$p${s}v=$(date +%s)")" || return 1
-  case "$html" in *"Plus ou moins"*) ;; *) return 1;; esac; done; }
-( umask 077; printf '%s' "$DATABASE_URL" > "$T/db.url" )
-construire
-node publish.mjs "$T/db.url"
-sleep 40   # le site recharge le code publié en 20 secondes au plus
-if ! site_ok; then
-  trap - ERR
-  annuler; construire; node publish.mjs "$T/db.url"
-  echo "::error::Le site ne répondait plus correctement après publication : ancienne version remise en ligne."; exit 1
-fi
-echo "Nouveau modèle publié et site vérifié."
+echo "Contrôles passés : nouveau modèle prêt dans lib/lignes-model.js."

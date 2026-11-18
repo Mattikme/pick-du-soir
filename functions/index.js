@@ -1,4 +1,4 @@
-// Point d'entrée Neon Function : robot de stats + API publique des picks
+// Point d'entrée du site (Vercel, via api/index.js) : robot de stats + API publique des picks
 import { homePage, playerPage, playersIndex, ideasPage, roadmapPage, classementPage, NEWS_LIST, sitemap, notFound, visualPage, nbaVisual, dayFR, page, algoPage, tc, hourFR } from '../lib/site.js';
 import { renderNews, renderPng, tweetText, recapText, xUpload, xTweet, xMe, xMetrics } from '../lib/xpost.js';
 import { usDate } from '../lib/ttfl.js';
@@ -498,22 +498,6 @@ export default {
     const url = new URL(request.url);
     const q = url.searchParams;
     const path = url.pathname.replace(/\/+$/, '') || '/';
-
-    // Déclencheurs planifiés Neon : POST /cron/<job>
-    if (request.method === 'POST' && path.startsWith('/cron/')) {
-      if (!request.headers.get('x-neon-trigger-invocation-id')) return json({ error: 'forbidden' }, 403);
-      const job = path.slice(6);
-      try {
-        const out = await runJob(job, q);
-        await log(job, true, out);
-        console.log(`cron ${job} ok`, JSON.stringify(out));
-        return json({ ok: true, job, ...out });
-      } catch (e) {
-        await log(job, false, { error: String(e) }).catch(() => {});
-        console.error(`cron ${job} failed`, e);
-        return json({ ok: false, error: String(e) }, 500);
-      }
-    }
 
     // Photos des joueurs servies depuis notre domaine (nécessaire pour les effets WebGL)
     const ph = path.match(/^\/ph\/(nba|nhl)\/(?:([A-Z]{2,3})\/)?(\d{3,9})\.png$/);

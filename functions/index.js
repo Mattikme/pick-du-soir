@@ -578,6 +578,19 @@ export default {
       const refs = await sql.query(`SELECT coalesce(ref,'direct') AS source, count(*)::int AS vues FROM page_views WHERE NOT bot AND day >= current_date - 7 GROUP BY 1 ORDER BY vues DESC LIMIT 10`);
       return json({ days, pages, refs });
     }
+    // Anti-scraping (20 nov. 2026) : clients automatisés évidents refusés (403), puis limite de 60 pages/minute par adresse (429)
+    if (request.method === 'GET' && !path.startsWith('/api') && !/\.(xml|txt|png|ico|svg|js|css)$/.test(path)) {
+      const ua = request.headers.get('user-agent') || '', ip = (request.headers.get('x-forwarded-for') || '').split(',')[0].trim();
+      if (!/googlebot|bingbot|duckduckbot|applebot|twitterbot|facebookexternalhit|linkedinbot|slackbot|discordbot|telegrambot|whatsapp|petalbot|yandex/i.test(ua)) {
+        if (!ua || !request.headers.get('accept-language') || /curl|wget|python|requests|scrapy|aiohttp|httpx|go-http|okhttp|java\/|libwww|node-fetch|axios|undici|headless|phantom|selenium|playwright|puppeteer|scraper|crawler|spider|\bbot\b/i.test(ua)) return new Response('Acces refuse', { status: 403, headers: { 'content-type': 'text/plain', 'cache-control': 'no-store' } });
+        if (ip) {
+          const RL = (globalThis.__rl ||= new Map()), n = Date.now(), a = (RL.get(ip) || []).filter((x) => n - x < 6e4);
+          a.push(n); RL.set(ip, a);
+          if (RL.size > 5e3) for (const [k, v] of RL) if (v[v.length - 1] < n - 6e4) RL.delete(k);
+          if (a.length > 60) return new Response('Trop de requetes', { status: 429, headers: { 'retry-after': '60', 'content-type': 'text/plain', 'cache-control': 'no-store' } });
+        }
+      }
+    }
     if (request.method === 'GET' && !path.startsWith('/api') && !/\.(xml|txt|png|ico|svg|js|css)$/.test(path)) {
       try {
         const ua = request.headers.get('user-agent') || '';
@@ -588,9 +601,13 @@ export default {
         const vh = [...new Uint8Array(buf)].slice(0, 8).map((b) => b.toString(16).padStart(2, '0')).join('');
         let ref = null; try { ref = new URL(request.headers.get('referer') || '').host || null; } catch {}
         if (ref && ref.endsWith(url.host.replace(/^www\./, ''))) ref = null;
-        await sql.query(`CREATE TABLE IF NOT EXISTS page_views (id bigserial PRIMARY KEY, ts timestamptz DEFAULT now(), day date DEFAULT current_date, path text, ref text, vh text, bot boolean)`);
-        await sql.query(`ALTER TABLE page_views ADD COLUMN IF NOT EXISTS ih text`);
-        await sql.query(`INSERT INTO page_views (path, ref, vh, bot, ih) VALUES ($1,$2,$3,$4,$3)`, [path, ref, vh, bot]);
+        if (!globalThis.__pv) { // tables vérifiées une seule fois par instance (économise des requêtes)
+          await sql.query(`CREATE TABLE IF NOT EXISTS page_views (id bigserial PRIMARY KEY, ts timestamptz DEFAULT now(), day date DEFAULT current_date, path text, ref text, vh text, bot boolean)`);
+          await sql.query(`ALTER TABLE page_views ADD COLUMN IF NOT EXISTS ih text`);
+          await sql.query(`ALTER TABLE page_views ADD COLUMN IF NOT EXISTS ua text`);
+          globalThis.__pv = 1;
+        }
+        await sql.query(`INSERT INTO page_views (path, ref, vh, bot, ih, ua) VALUES ($1,$2,$3,$4,$3,$5)`, [path, ref, vh, bot, ua.slice(0, 160)]);
       } catch (e) { console.error('views', String(e).slice(0, 120)); }
     }
     // Défi du soir arrêté (14 nov. 2026) : ses pages renvoient vers les lignes du soir. Le code du jeu reste dans lib/game.js.

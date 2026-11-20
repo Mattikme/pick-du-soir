@@ -204,12 +204,20 @@ async function xAlgoRecap(league, dry) {
   const ok = mine.filter((k) => k.ok).length, tot = all.filter((k) => k.league === league && (row.old ? !k.side : !!k.side));
   const tok = tot.filter((k) => k.ok).length, emoji = league === 'nhl' ? '🏒' : '🏀', tags = league === 'nhl' ? '#NHL #TeamParieur' : '#NBA #TeamParieur';
   const total = tot.length >= 8 ? `Depuis le lancement : ${tok}/${tot.length} (${Math.round(tok / tot.length * 100)} %), ratés compris.` : `Depuis le lancement : ${tok}/${tot.length}, ratés compris.`;
+  // X refuse > 280 caractères sans Premium (403) : on essaie des versions de plus en plus courtes, comptées façon X (emoji = 2)
+  const xLen = (t) => [...t].reduce((n, ch) => n + (ch.codePointAt(0) > 0x1100 ? 2 : 1), 0);
+  const legal = 'Stats informatives, pas un conseil de pari.', head = `${emoji} Bilan des lignes ${league.toUpperCase()} d'hier : ${ok}/${mine.length}`;
+  const totalShort = `Depuis le lancement : ${tok}/${tot.length}`;
+  const mk = (nameOf, lblOf, tot_, tg) => `${head}\n\n${mine.map((k) => `${k.ok ? '✅' : '❌'} ${nameOf(k)} : ${lblOf(k)} → ${k.val}`).join('\n')}\n\n${tot_ ? tot_ + '\n' : ''}${legal}${tg ? '\n' + tg : ''}`;
+  const fullName = (k) => shortName(k.name), lastName = (k) => shortName(k.name).split(' ').slice(-1)[0];
+  const compact = (k) => (k.side ? `${k.side === 'moins' ? '-' : '+'}${fr1(k.thr)} ${STATS[k.stat]?.short || k.stat}` : label(k));
+  const variants = [
+    () => mk(fullName, label, total, tags), () => mk(lastName, label, total, tags), () => mk(lastName, label, total, ''),
+    () => mk(lastName, label, totalShort, ''), () => mk(lastName, compact, totalShort, ''), () => mk(lastName, compact, '', ''),
+  ];
   let text = '';
-  for (const full of [true, false]) {
-    const lines = mine.map((k) => `${k.ok ? '✅' : '❌'} ${full ? shortName(k.name) : shortName(k.name).split(' ').slice(-1)[0]} : ${label(k)} → ${k.val}`);
-    text = `${emoji} Bilan des lignes ${league.toUpperCase()} d'hier : ${ok}/${mine.length}\n\n${lines.join('\n')}\n\n${total}\nStats informatives, pas un conseil de pari.\n${tags}`;
-    if (text.length <= 275) break;
-  }
+  for (const v of variants) { text = v(); if (xLen(text) <= 280) break; }
+  if (xLen(text) > 280) text = `${head}\n\n${legal}`; // dernier recours : le détail est dans l'image
   const items = mine.map((k) => ({ name: k.name, ok: k.ok, val: k.val, short: statName(k.stat, k.val), goal: label(k) }));
   let png = null; try { png = await renderRecap(league, items, dayFR(row.day), null, null, ['LIGNES', 'RÉUSSIES', 'LES LIGNES DU SOIR'], row.old ? null : { ok: tok, n: tot.length }); } catch (e) { console.error('bilan lignes', e); }
   if (dry) return { dry: true, day: row.day, text, longueur: text.length, bytes: png?.length };
